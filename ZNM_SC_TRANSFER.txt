@@ -1,0 +1,643 @@
+REPORT znm_sc_transfer MESSAGE-ID 00.
+*----------------------------------------------------------------------*
+* Created by NM to test Shopping Cart backend transfer
+*----------------------------------------------------------------------*
+* Text Symbols
+* B01	Shopping Cart selection
+* B02	Activate breakpoins to debug
+* C01	Follow-on document determination
+* C02	Purchase Requisition BADI
+* C03	Purchase Requisition transfer
+* C04	Purchase Order BADI
+* C05	Purchase Order transfer
+* C06	Shopping Cart
+* C07	Check Shopping Cart
+* M01	Shopping Cart not found
+* M02	Shopping Cart already transfered
+* M03	SC transfered
+* M04	Please fill Shopping Cart...
+* M05	You are in a productive system
+* M06	Break points deleted
+* M07	communication failed
+* M08	Shopping Cart not checked
+* M09	Shopping Cart checked
+* P01	Reading SC data
+* P02	Breakpoints activation
+* P03	Transferring SC
+* P04	Reading follow-on docs
+* P05	Checking drivers
+* PB1	% Complete
+* SF1	Search Shopping Cart
+* SF2	Delete Breaks
+*
+* Selection Texts
+* P_FDOC Follow-on document
+* P_PO_P Purchase Order BADI
+* P_PO_T Purchase Order transfer
+* P_PR_P Purchase Requisition BADI
+* P_PR_T Purchase Requisition transfer
+* P_SC Shopping Cart
+*
+*----------------------------------------------------------------------*
+* Adapt constants GC_PR_BADI GC_PO_BADI for system BADIs implementations or kept SPACE
+*----------------------------------------------------------------------*
+CONSTANTS:
+  gc_pr_badi TYPE program VALUE 'ZCL_IM_WPU_IM_CREATE_BE_RQ', "Purchase Requisition BADI if exist
+  gc_po_badi TYPE program VALUE 'ZCL_IM_WPU_IM_CREATE_BE_PO'. "Purchase Order BADI if exist
+*----------------------------------------------------------------------*
+
+*----------------------------------------------------------------------*
+* GLOBAL DATA
+*----------------------------------------------------------------------*
+TYPE-POOLS: abap, icon.
+TABLES: sscrfields.
+
+CONSTANTS:
+  gc_class    TYPE trobjtype  VALUE 'CLAS',     "Class object
+  gc_func     TYPE trobjtype  VALUE 'FUNC',     "Function object
+  gc_obj_fdoc TYPE swo_objtyp VALUE 'BUS6015',  "Follow-on document object
+  gc_obj_pr   TYPE swo_objtyp VALUE 'BUS2105',  "Purchase requisition object
+  gc_obj_po   TYPE swo_objtyp VALUE 'BUS2012'.  "Purchase order object
+
+SET EXTENDED CHECK OFF. "Set extendend check off for global data
+DATA:
+  gs_sc_header   TYPE bbp_pds_sc_header_d,  "Interface Header Data Shopping Cart
+  gv_percent     TYPE i.                    "Progress bar percentage
+SET EXTENDED CHECK ON.
+
+*----------------------------------------------------------------------*
+* SELECTION SCREEN
+*----------------------------------------------------------------------*
+*--------------------------------------------- Shopping Cart Selection *
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE text-b01.
+SELECTION-SCREEN SKIP 1.
+
+SELECTION-SCREEN BEGIN OF LINE.
+SELECTION-SCREEN COMMENT (20) com_sc.
+PARAMETERS: p_sc TYPE crmt_object_id_db.
+SELECTION-SCREEN PUSHBUTTON 38(20) pb_sc USER-COMMAND uc_sc.
+SELECTION-SCREEN END OF LINE.
+
+SELECTION-SCREEN SKIP 1.
+SELECTION-SCREEN END OF BLOCK b01.
+
+*---------------------------------------- Activate breakpoins to debug *
+SELECTION-SCREEN BEGIN OF BLOCK b02 WITH FRAME TITLE text-b02.
+SELECTION-SCREEN SKIP 1.
+
+*---------- Follow-on document determination debug ----------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS p_fdoc AS CHECKBOX MODIF ID fdo.
+SELECTION-SCREEN COMMENT (35) com_fdoc MODIF ID fdo.
+SELECTION-SCREEN PUSHBUTTON 38(4) pb_fdoc USER-COMMAND uc_fdoc MODIF ID fdo.
+PARAMETERS obj_fdoc TYPE char40 MODIF ID mem.
+SELECTION-SCREEN END OF LINE.
+
+*---------- Purchase Requisition BADI debug ----------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS p_pr_p AS CHECKBOX MODIF ID prp.
+SELECTION-SCREEN COMMENT (35) com_pr_p MODIF ID prp.
+SELECTION-SCREEN PUSHBUTTON 38(4) pb_pr_p USER-COMMAND uc_pr_p MODIF ID prp.
+PARAMETERS obj_pr_p TYPE char40 MODIF ID mem.
+SELECTION-SCREEN END OF LINE.
+
+*---------- Purchase Requisition transfer debug ----------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS p_pr_t AS CHECKBOX MODIF ID prt.
+SELECTION-SCREEN COMMENT (35) com_pr_t MODIF ID prt.
+SELECTION-SCREEN PUSHBUTTON 38(4) pb_pr_t USER-COMMAND uc_pr_t MODIF ID prt.
+PARAMETERS obj_pr_t TYPE char40 MODIF ID mem.
+SELECTION-SCREEN END OF LINE.
+
+*---------- Purchase Order BADI debug ----------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS p_po_p AS CHECKBOX MODIF ID pop.
+SELECTION-SCREEN COMMENT (35) com_po_p MODIF ID pop.
+SELECTION-SCREEN PUSHBUTTON 38(4) pb_po_p USER-COMMAND uc_po_p MODIF ID pop.
+PARAMETERS obj_po_p TYPE char40 MODIF ID mem.
+SELECTION-SCREEN END OF LINE.
+
+*---------- Purchase Order transfer debug ----------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS p_po_t AS CHECKBOX MODIF ID pot.
+SELECTION-SCREEN COMMENT (35) com_po_t MODIF ID pot.
+SELECTION-SCREEN PUSHBUTTON 38(4) pb_po_t USER-COMMAND uc_po_t MODIF ID pot.
+PARAMETERS obj_po_t TYPE char40 MODIF ID mem.
+SELECTION-SCREEN END OF LINE.
+
+SELECTION-SCREEN SKIP 1.
+SELECTION-SCREEN END OF BLOCK b02.
+
+*---------- Functions ----------*
+SELECTION-SCREEN FUNCTION KEY 1.  "Shopping Cart
+SELECTION-SCREEN FUNCTION KEY 2.  "Delete breaks
+
+*--------------------------------*
+* Selection Screen PBO
+*--------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+  PERFORM screen_pbo.
+
+*--------------------------------*
+* Selection Screen PAI
+*--------------------------------*
+AT SELECTION-SCREEN.
+  PERFORM screen_pai.
+
+*----------------------------------------------------------------------*
+* REPORT EVENTS
+*----------------------------------------------------------------------*
+*--------------------------------*
+* Initialization events
+*--------------------------------*
+LOAD-OF-PROGRAM.
+  PERFORM load_of_program.
+
+INITIALIZATION.
+  PERFORM initialization.
+
+*--------------------------------*
+* Executing events
+*--------------------------------*
+START-OF-SELECTION.
+  PERFORM set_breakpoints.
+  PERFORM transfer.
+
+*----------------------------------------------------------------------*
+* FORMS
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Form  LOAD_OF_PROGRAM
+*&---------------------------------------------------------------------*
+FORM load_of_program .
+
+  DATA ls_functxt TYPE smp_dyntxt. "Menu Painter: Program interface for dynamic texts
+
+*---------- Set selection screen comments ----------*
+  com_fdoc = text-c01.    "Follow-on document determination
+  com_pr_p = text-c02.    "Purchase Requisition BADI
+  com_pr_t = text-c03.    "Purchase Requisition transfer
+  com_po_p = text-c04.    "Purchase Order BADI
+  com_po_t = text-c05.    "Purchase Order transfer
+  com_sc   = text-c06.    "Shopping Cart
+  obj_pr_p = gc_pr_badi.  "PR BADI
+  obj_po_p = gc_po_badi.  "PO BADI
+
+  pb_sc    = text-c07.  "Check Shopping Cart
+  pb_po_p = pb_pr_p = pb_po_t = pb_pr_t = pb_fdoc = icon_abap. "Set icon
+
+*---------- Set selection screen function ----------*
+  ls_functxt-icon_id    = icon_select_detail.
+  ls_functxt-icon_text  = ls_functxt-quickinfo = text-sf1.  "Search Shopping Cart
+  sscrfields-functxt_01 = ls_functxt.
+
+  ls_functxt-icon_id    = icon_breakpoint_disable.
+  ls_functxt-icon_text  = ls_functxt-quickinfo = text-sf2.  "Delete Breaks
+  sscrfields-functxt_02 = ls_functxt.
+
+ENDFORM.                    " LOAD_OF_PROGRAM
+
+*&---------------------------------------------------------------------*
+*&      Form  INITIALIZATION
+*&---------------------------------------------------------------------*
+FORM initialization .
+
+*---------- Check if is production ----------*
+  CALL FUNCTION 'PRGN_CHECK_SYSTEM_PRODUCTIVE'
+    EXCEPTIONS
+      client_is_productive = 1
+      OTHERS               = 2.
+
+  IF sy-subrc IS NOT INITIAL.
+    MESSAGE e398 WITH text-m05 space space space. "You are in a productive system
+  ENDIF.
+
+ENDFORM.                    " INITIALIZATION
+
+*&---------------------------------------------------------------------*
+*&      Form  SCREEN_PBO
+*&---------------------------------------------------------------------*
+FORM screen_pbo .
+
+*---------- Format screen fields ----------*
+  LOOP AT SCREEN.
+    CASE screen-group1.
+      WHEN 'MEM'.
+        PERFORM set_screen USING space.
+      WHEN 'PRP'. "Purchase Requisition BADI constant
+        PERFORM set_screen USING gc_pr_badi.
+      WHEN 'POP'. "Purchase Order BADI constant
+        PERFORM set_screen USING gc_po_badi.
+    ENDCASE.
+  ENDLOOP.
+
+ENDFORM.                    " SCREEN_PBO
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_SCREEN
+*&---------------------------------------------------------------------*
+FORM set_screen USING p_value TYPE program.
+
+  IF p_value IS INITIAL.
+    screen-input = 0.
+    screen-display_3d = 0.
+  ELSE.
+    screen-input = 1.
+  ENDIF.
+  MODIFY SCREEN.
+
+ENDFORM.                    " SET_SCREEN
+
+*&---------------------------------------------------------------------*
+*&      Form  SCREEN_PAI
+*&---------------------------------------------------------------------*
+FORM screen_pai .
+
+  CASE sy-ucomm.
+*---------- Screen Buttons display code ----------*
+    WHEN 'UC_FDOC'. "Follow-on document
+      PERFORM show_code USING gc_func obj_fdoc.
+    WHEN 'UC_PR_P'. "Purchase Requisition BADI
+      PERFORM show_code USING gc_class gc_pr_badi.
+    WHEN 'UC_PR_T'. "Purchase Requisition transfer
+      PERFORM show_code USING gc_class obj_pr_t.
+    WHEN 'UC_PO_P'. "Purchase Order BADI
+      PERFORM show_code USING gc_class gc_po_badi.
+    WHEN 'UC_PO_T'. "Purchase Order transfer
+      PERFORM show_code USING gc_class obj_po_t.
+
+*---------- Execute and Check system type ----------*
+    WHEN 'ONLI' OR 'UC_SC'.
+      PERFORM read_check_sc. "Read SC data and check backend system type drivers
+
+*---------- Search Shopping Cart ----------*
+    WHEN 'FC01'.
+      CALL TRANSACTION 'BBP_PD'.
+
+*---------- Delete break points ----------*
+    WHEN 'FC02'.
+      PERFORM delete_breakpoints.
+      MESSAGE s398 WITH text-m06 space space space.  "Break points deleted
+  ENDCASE.
+
+ENDFORM.                    " SCREEN_PAI
+
+*----------------------------------------------------------------------*
+* Form PROGRESS_BAR
+*----------------------------------------------------------------------*
+FORM progress_bar USING i_value  TYPE itex132
+                        i_tabix  TYPE i.
+  DATA:
+     lv_text(40),
+     lv_percentage TYPE p,
+     lv_percent_char(3).
+
+  lv_percentage = ( i_tabix / 100 ) * 100.
+  lv_percent_char = lv_percentage.
+
+  SHIFT lv_percent_char LEFT DELETING LEADING ' '.
+  CONCATENATE i_value '...' INTO i_value.
+  CONCATENATE i_value lv_percent_char text-pb1 INTO lv_text SEPARATED BY space.
+
+  IF lv_percentage GT gv_percent OR i_tabix = 1.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_percentage
+        text       = lv_text.
+
+    gv_percent = lv_percentage.
+  ENDIF.
+
+ENDFORM.                    " PROGRESS_BAR
+
+*&---------------------------------------------------------------------*
+*&      Form  READ_CHECK_SC
+*&---------------------------------------------------------------------*
+FORM read_check_sc.
+
+  CONSTANTS:
+    lc_fdoc_method TYPE bbp_method VALUE 'GetInfo',         "FDOC Function Map method
+    lc_pr_method   TYPE bbp_method VALUE 'CreateFromData1', "PR Function Map method
+    lc_po_method   TYPE bbp_method VALUE 'CreateFromData2'. "PO Function Map method
+
+  DATA:
+    lt_sc_status TYPE TABLE OF bbp_pds_status,    "Shopping Cart Status
+    lt_item      TYPE TABLE OF bbp_pds_sc_item_d, "Shopping Cart Item Data
+    ls_item      LIKE LINE OF lt_item.
+
+  DATA:
+    lv_system_type  TYPE bbp_system_type, "System type
+    lv_rfc_possible TYPE rfcpossible.     "If the System Is RFC-Compatible
+
+  CLEAR: gs_sc_header, obj_fdoc, obj_pr_t, obj_po_t.
+
+  IF p_sc IS NOT INITIAL.
+*---------- Read Shopping Cart data ----------*
+    PERFORM progress_bar USING text-p01 '10'. "Reading SC data
+
+    CALL FUNCTION 'BBP_PD_SC_GETDETAIL'
+      EXPORTING
+        i_object_id = p_sc
+      IMPORTING
+        e_header    = gs_sc_header
+      TABLES
+        e_item      = lt_item
+        e_status    = lt_sc_status.
+
+    IF gs_sc_header IS NOT INITIAL. "Shopping Cart found, check status
+      LOOP AT lt_sc_status TRANSPORTING NO FIELDS WHERE ( stat = 'I1111' OR stat = 'I1113' ) AND inact IS INITIAL.
+        CLEAR gs_sc_header.
+        MESSAGE s398 WITH text-m02 space space space DISPLAY LIKE 'W'. "Shopping Cart already transfered/created
+        IF sy-ucomm = 'ONLI'. RETURN. ENDIF.
+      ENDLOOP.
+
+*---------- Read backend system type ----------*
+      PERFORM progress_bar USING text-p05 '20'. "Checking drivers
+
+      READ TABLE lt_item INTO ls_item INDEX 1.
+      IF sy-subrc IS INITIAL.
+
+        CALL FUNCTION 'BBP_LOGICAL_SYSTEM_GETDETAIL'
+          EXPORTING
+            logical_system = ls_item-logsys_fi
+          IMPORTING
+            system_type    = lv_system_type
+            rfc_possible   = lv_rfc_possible
+          EXCEPTIONS
+            not_found      = 1
+            OTHERS         = 2.
+
+        IF lv_rfc_possible IS NOT INITIAL AND lv_system_type IS NOT INITIAL AND sy-subrc IS INITIAL.  "Valid backend
+*---------- Read Follow-on document determination ----------*
+          SELECT SINGLE function FROM bbp_function_map
+            INTO obj_fdoc
+           WHERE object = gc_obj_fdoc
+             AND method = lc_fdoc_method
+             AND type   = lv_system_type.
+
+*---------- Read PR function map ----------*
+          SELECT SINGLE function FROM bbp_function_map
+            INTO obj_pr_t
+           WHERE object = gc_obj_pr
+             AND method = lc_pr_method
+             AND type   = lv_system_type.
+
+*---------- Read PO function map ----------*
+          SELECT SINGLE function FROM bbp_function_map
+            INTO obj_po_t
+           WHERE object = gc_obj_po
+             AND method = lc_po_method
+             AND type   = lv_system_type.
+
+          MESSAGE s398 WITH text-m09 space space space. "Shopping Cart checked
+
+        ELSE.
+          MESSAGE s398 WITH ls_item-logsys_fi text-m07 space space DISPLAY LIKE 'E'. "Communication failed
+        ENDIF.
+      ENDIF.
+
+    ELSE.
+      MESSAGE s398 WITH text-m01 space space space DISPLAY LIKE 'E'.  "Shopping Cart not found
+    ENDIF.
+
+  ELSE.
+    MESSAGE s398 WITH text-m04 space space space DISPLAY LIKE 'W'.  "Please fill Shopping Cart...
+  ENDIF.
+
+ENDFORM.                    " READ_CHECK_SC
+
+*&---------------------------------------------------------------------*
+*&      Form  SHOW_CODE
+*&---------------------------------------------------------------------*
+FORM show_code USING p_object_type p_object_name .      "#EC PF_NO_TYPE
+
+  IF p_object_type IS NOT INITIAL AND p_object_name IS NOT INITIAL.
+    CALL FUNCTION 'RS_TOOL_ACCESS'  "Display object
+      EXPORTING
+        operation           = 'SHOW'
+        object_name         = p_object_name
+        object_type         = p_object_type
+      EXCEPTIONS
+        not_executed        = 1
+        invalid_object_type = 2
+        OTHERS              = 3.
+
+    IF sy-subrc IS NOT INITIAL.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+  ELSE.
+    MESSAGE s398 WITH text-m08 space space space DISPLAY LIKE 'W'. "Shopping Cart not checked
+  ENDIF.
+
+ENDFORM.                    " SHOW_CODE
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_BREAKPOINTS
+*&---------------------------------------------------------------------*
+FORM set_breakpoints .
+
+  IF gs_sc_header IS NOT INITIAL.
+    PERFORM progress_bar USING text-p02 '40'. "Breakpoints activation
+
+*---------- Follow-on document ----------*
+    PERFORM set_break_point USING p_fdoc abap_false gc_func obj_fdoc.
+
+*---------- Purchase Requisition BADI ----------*
+    PERFORM set_break_point USING p_pr_p abap_false gc_class gc_pr_badi.
+*---------- Purchase Requisition transfer ----------*
+    PERFORM set_break_point USING p_pr_t abap_false gc_class obj_pr_t.
+
+*---------- Purchase Order BADI ----------*
+    PERFORM set_break_point USING p_po_p abap_false gc_class gc_po_badi.
+*---------- Purchase Order transfer ----------*
+    PERFORM set_break_point USING p_po_t abap_false gc_class obj_po_t.
+
+    WAIT UP TO 1 SECONDS.
+  ENDIF.
+
+ENDFORM.                    " SET_BREAKPOINTS
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_BREAK_POINT
+*&---------------------------------------------------------------------*
+FORM set_break_point USING p_activate     TYPE abap_bool
+                           p_delete       TYPE abap_bool
+                           p_object_type  TYPE trobjtype
+                           p_main_program.
+  DATA:
+    lt_breakpoints  TYPE breakpoints,              "Breakpoint Table
+    ls_breakpoint   TYPE breakpoint,
+    lt_methods      TYPE seop_methods_w_include,
+    ls_method       TYPE seop_method_w_include,
+    ls_tfdir        TYPE tfdir,                    "Function Module
+    lv_main_program TYPE program.
+
+  DATA:
+    lv_clsname   TYPE seoclsname, "Object Type Name
+    lv_area      TYPE rs38l_area, "Function group, to which the function module belongs
+    lv_namespace TYPE namespace.  "Namespace
+
+  CHECK p_activate IS NOT INITIAL OR p_delete IS NOT INITIAL. "Add only if activated or to delete
+
+  IF p_object_type IS NOT INITIAL AND p_main_program IS NOT INITIAL.
+
+    CASE p_object_type.
+*---------- Class Include----------*
+      WHEN gc_class.
+        lv_clsname = p_main_program.
+        CALL METHOD cl_oo_classname_service=>get_classpool_name "Get main program include
+          EXPORTING
+            clsname = lv_clsname
+          RECEIVING
+            result  = lv_main_program.
+
+        IF p_activate IS NOT INITIAL AND p_delete IS INITIAL.
+          CALL METHOD cl_oo_classname_service=>get_all_method_includes  "Get all methods
+            EXPORTING
+              clsname            = lv_clsname
+            RECEIVING
+              result             = lt_methods
+            EXCEPTIONS
+              class_not_existing = 1
+              OTHERS             = 2.
+
+          IF sy-subrc IS NOT INITIAL. "If error
+            MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty.
+          ENDIF.
+
+          LOOP AT lt_methods INTO ls_method.  "Loop all method to add break points
+            ls_breakpoint-program = ls_method-incname.  "Method include name
+            ls_breakpoint-line    = '1'.                "Line of code
+            APPEND ls_breakpoint TO lt_breakpoints.     "Add
+          ENDLOOP.
+        ENDIF.
+
+*---------- Function Include----------*
+      WHEN gc_func.
+        SELECT SINGLE * FROM tfdir  "Read Function Module
+          INTO ls_tfdir
+         WHERE funcname = p_main_program.
+
+        IF sy-subrc IS INITIAL. "Function Module found
+          CALL FUNCTION 'FUNCTION_INCLUDE_SPLIT'
+            EXPORTING
+              program                      = ls_tfdir-pname
+            IMPORTING
+              namespace                    = lv_namespace
+              group                        = lv_area
+            EXCEPTIONS
+              include_not_exists           = 1
+              group_not_exists             = 2
+              no_selections                = 3
+              no_function_include          = 4
+              no_function_pool             = 5
+              delimiter_wrong_position     = 6
+              no_customer_function_group   = 7
+              no_customer_function_include = 8
+              reserved_name_customer       = 9
+              namespace_too_long           = 10
+              area_length_error            = 11
+              OTHERS                       = 12.
+
+          IF sy-subrc IS NOT INITIAL. "Error spliting
+            MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty.
+          ENDIF.
+
+          lv_main_program = ls_tfdir-pname.  "Set main program name
+
+          IF p_activate IS NOT INITIAL AND p_delete IS INITIAL.
+            ls_breakpoint-program = lv_namespace && 'L' && lv_area && 'U' && ls_tfdir-include.  "Function include name
+            ls_breakpoint-line    = '1'.                                                        "Line of code
+            APPEND ls_breakpoint TO lt_breakpoints.                                             "Add
+          ENDIF.
+        ENDIF.
+    ENDCASE.
+
+*---------- Set Breakpoints ----------*
+    CALL METHOD cl_abap_debugger=>save_breakpoints
+      EXPORTING
+        main_program          = lv_main_program
+        breakpoints           = lt_breakpoints
+      EXCEPTIONS
+        too_many_breakpoints  = 1
+        generate              = 2
+        bp_position_not_found = 3
+        error                 = 4
+        c_call_error          = 5
+        OTHERS                = 6.
+
+    IF sy-subrc IS NOT INITIAL. "Break point error
+      MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 DISPLAY LIKE sy-msgty.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    " SET_BREAK_POINT
+
+*&---------------------------------------------------------------------*
+*&      Form  TRANSFER
+*&---------------------------------------------------------------------*
+FORM transfer .
+
+  DATA:
+    lv_is_sc      TYPE abap_bool,                           "#EC NEEDED
+    lv_objid_b    TYPE string,
+    lt_header_rel TYPE TABLE OF bbp_pds_hrel,
+    ls_header_rel LIKE LINE OF  lt_header_rel.
+
+  IF gs_sc_header IS NOT INITIAL.
+    PERFORM progress_bar USING text-p03 '60'. "Transferring SC
+
+    CALL FUNCTION 'BBP_PD_SC_TRANSFER'
+      EXPORTING
+        i_guid = gs_sc_header-guid.
+
+    PERFORM progress_bar USING text-p04 '90'. "Reading follow-on docs
+    WAIT UP TO 1 SECONDS.
+
+    CALL FUNCTION 'BBP_PD_SC_GETDETAIL' "Read Shopping Cart data
+      EXPORTING
+        i_object_id     = p_sc
+        i_with_itemdata = space
+      IMPORTING
+        ev_is_pd        = lv_is_sc
+      TABLES
+        e_header_rel    = lt_header_rel.
+
+    READ TABLE lt_header_rel INTO ls_header_rel INDEX 1.
+    IF ls_header_rel-objid_b IS INITIAL.
+      MESSAGE i398 WITH text-m03 space space space. "SC transfer.
+
+    ELSE.
+      CASE ls_header_rel-objtype_b.
+        WHEN gc_obj_pr. "Purchase Requisiton
+          CONCATENATE ' PR' ls_header_rel-objid_b INTO lv_objid_b SEPARATED BY space RESPECTING BLANKS.
+        WHEN gc_obj_po. "Purchase order
+          CONCATENATE ' PO' ls_header_rel-objid_b INTO lv_objid_b SEPARATED BY space RESPECTING BLANKS.
+      ENDCASE.
+
+      MESSAGE i398 WITH text-m03 lv_objid_b space space.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    " TRANSFER
+
+*&---------------------------------------------------------------------*
+*&      Form  DELETE_BREAKPOINTS
+*&---------------------------------------------------------------------*
+FORM delete_breakpoints .
+
+*---------- Follow-on document ----------*
+  PERFORM set_break_point USING abap_false abap_true gc_func obj_fdoc.
+
+*---------- Purchase Requisition BADI ----------*
+  PERFORM set_break_point  USING abap_false abap_true gc_class gc_pr_badi.
+*---------- Purchase Requisition transfer ----------*
+  PERFORM set_break_point USING abap_false abap_true gc_class obj_pr_t.
+
+*---------- Purchase Order BADI ----------*
+  PERFORM set_break_point USING abap_false abap_true gc_class gc_po_badi.
+*---------- Purchase Order transfer ----------*
+  PERFORM set_break_point USING abap_false abap_true gc_class obj_po_t.
+
+ENDFORM.                    " DELETE_BREAKPOINTS
